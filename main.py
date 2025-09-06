@@ -3,8 +3,6 @@ from pydantic import BaseModel
 from db import products_collection, users_collection, cart_list
 from bson.objectid import ObjectId
 from utils import replace_mongo_id
-from products import sample_products
-
 
 class UserInfo(BaseModel):
     username: str
@@ -83,11 +81,11 @@ def post_login_details(user_name: str, user_password: str):
 @app.post("/cart")
 def add_to_cart(cart: UserCart):
     # Ensure user exists
-    if not users_collection.find_one({"_id": ObjectId(cart.user_id)}):
+    user = next((u for u in users if u["id"] == cart.user_id), None)
+    if not user:
         raise HTTPException(status_code=404, detail="User not found")
-
     # Ensure product exists
-    product = products_collection.find_one({"id": (cart.item.product_id)})
+    product = next((p for p in products if p["id"] == cart.item.product_id), None)
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
 
@@ -109,3 +107,46 @@ def get_cart(user_id: str):
 
     cart_items = [replace_mongo_id(item) for item in items]
     return {"cart": cart_items}
+
+
+@app.post("/checkout/{user_id}")
+def checkout(user_id:str):
+    # Ensure user exists
+    user = next((u for u in users if u["id"] == user_id), None)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Get all cart items for this user
+    cart_items = [replace_mongo_id(item) for item in cart_list.find({"user_id": user_id})]
+
+    if not cart_items:
+        raise HTTPException(status_code=400, detail="Cart is empty")
+
+    # Build order summary
+    order_items = []
+    total = 0
+
+    for item in cart_items:
+        # Find product info
+        product = next((p for p in products if p["id"] == item["item"]["product_id"]), None)
+        if not product:
+            continue  # skip missing product
+
+        quantity = item["item"]["quantity"]
+        subtotal = product["price"] * quantity
+        total += subtotal
+
+        order_items.append({
+            "product_id": product["id"],
+            "name": product["name"],
+            "price": product["price"],
+            "quantity": quantity,
+            "subtotal": subtotal
+        })
+
+    return {
+        "message": "Order summary",
+        "user": {"id": user["id"], "username": user["username"], "email": user["email"]},
+        "order_items": order_items,
+        "total": total
+    }
